@@ -1,0 +1,67 @@
+## Arch ##
+
+# Desktop Manager and Image Viewer
+feh
+
+# File Manager and Archiver
+ranger
+xarchiver
+zip
+unzip
+p7zip
+lzop
+cpio
+unrar
+
+# Trash Support
+gvfs
+
+# Terminal emulator
+terminator
+
+# Composite Manager and Transparency
+xcompmgr
+transset-df
+
+# Networking
+connman
+wpa_supplicant
+bluez
+
+# Sound
+alsa-utils
+pulseaudio
+pulseaudio-alsa
+
+# Media Player
+vlc
+
+# Openbox Theming
+obconf
+openbox-themes
+
+# System Monitor
+conky
+
+# Taskbar
+#cairo-dock
+#cairo-dock-plug-ins
+tint2
+
+# Bittorrent
+transmission-cli
+transmission-remote-cli
+
+# Whois
+whois
+
+# Git
+git
+
+# Flash
+flashplugin
+
+## BlackArch ##
+
+# Proxy
+mitmproxy

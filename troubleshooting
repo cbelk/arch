@@ -1,0 +1,79 @@
+Grub2
+====================================================
+
+Dropping to 'grub rescue' shell on boot
+----------------------------------------------------
+
+* System:
+    - Arch
+    - LVM on LUKS with encrypted boot
+
+* Cause:
+    - Still not completely sure.
+    - Was testing to see if the latest vulnerability in cryptsetup (http://hmarco.org/bugs/CVE-2016-4484/CVE-2016-4484_cryptsetup_initrd_shell.html) would
+      affect a system that had the boot partition encrypted.
+    - When prompted for the password to unlock the boot partition I held down the enter key.
+    - After about 30 seconds, I was dropped to the 'grub rescue>' shell.
+    - Looked around for a bit with 'ls'
+    - The 'help' command, as well as the other commands that I saw online were supposed to be supported by the 'grub rescue' shell, were not recognized.
+    - After trying (unsucessfully) to reboot/shutdown the system from this shell I did a hard shutdown.
+    - Everytime the system would try to boot I would get the 'grub rescue' shell after providing the password (or the USB keyfile).
+    - Only other command I ran was 'set pager=1'.
+
+* Fix:
+    - Boot into an Arch live USB.
+    - Determine block devices
+        # lsblk
+        sda      ... disk
+         |
+         |-sda1  ... part
+         |-sda2  ... part
+         |-sda3  ... part
+         ...
+
+    - Determine/verify encrypted partitions
+        # cryptsetup -v luksDump /dev/sdaX  ((do this for each partition above if you don't know/remember your partition scheme))
+    - Open the LUKS containers (sda2 == boot && sda3 == system)
+        # cryptsetup luksOpen /dev/sda2 cryptboot
+        # cryptsetup luksOpen /dev/sda3 lvm
+    - Scan for logical volumes
+        # lvscan
+    - If your logical volume is inactive, activate it
+        # vgchange -ay VolumeGroupName
+    - Mount the partitions
+        # mkdir -p /mnt/{boot/efi,home}
+        # mount /dev/sda1 /mnt/boot/efi
+        # mount /dev/mapper/cryptboot /mnt/boot
+        # mount /dev/mapper/VolumeGroupName-root /mnt/
+        # mount /dev/mapper/VolumeGroupName-home /mnt/home
+    - Check the block devices again to make sure everything was mounted
+    - Chroot to the mounted system
+        # arch-chroot /mnt /bin/bash
+    ((If the system hasn't booted before, check your grub config as well as the initramfs config to make sure you have included everything you need))
+    - Make sure everything is still mounted properly
+        # lsblk
+        sda                             ... disk
+         |
+         |-sda1                         ... part  /boot/efi
+         |-sda2                         ... part
+         |  |-cryptboot                 ... crypt /boot
+         |
+         |-sda3                         ... part
+            |-lvm                       ... crypt
+               |-VolumeGroupName-root   ... lvm  /
+               |-VolumeGroupName-home   ... lvm  /home
+        ...
+
+    - Regenerate the initramfs image
+        # mkinitcpio -p linux
+    - Regenerate the Grub config file
+        # grub-mkconfig -o /boot/grub/grub.cfg
+    - Install grub to the mounted ESP
+        # grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=grub --recheck
+    - Exit chroot, unmount system, and reboot
+        # exit
+        # umount -R /mnt
+        # reboot now
+
+    --- After this the system booted perfectly. Initial attempts at this same process did not yield such results, but I think it was the way I was doing the mounting because
+        certain files weren't present in the /boot directory during chroot that should have been there (eg vmlinuz-linux and initramfs-linux.img).

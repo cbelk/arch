@@ -1,0 +1,241 @@
+=====================================================================
+Setup
+=====================================================================
+
+=> LVM on LUKS
+=> Encrypted Boot
+=> External Keyfile
+
+=====================================================================
+System Partitions
+=====================================================================
+
+* To verify you are booted in UEFI mode check that /sys/firmware/efi/efivars is populated.
+* It is recommended to keep the ESP size at 512 MiB although smaller/larger sizes are fine.
+* (parted) quit  <-- Used to exit parted interactive mode
+* lsblk -l OR gdisk /dev/sda to see partition scheme
+
+=> Create new partition table
+# parted /dev/sda
+(parted) mklabel gpt
+
+=> Create ESP
+(parted) mkpart ESP fat32 1MiB 513MiB
+(parted) set 1 boot on
+# mkfs.fat -F32 /dev/sdaY
+
+=> Create Boot
+(parted) mkpart primary ext2 513MiB 1GB
+??? (parted) set 2 boot on //Does this need to have boot flag set? ***did without
+
+=> Create Encrypted Container
+//(parted) mkpart primary 8E00 1GiB 100%
+(parted) mkpart primary ext4 1GiB 100%
+(parted) set 3 lvm on
+# cryptsetup -s 512 luksFormat /dev/sdaZ /media/usbstick/mykeyfile       ***sdaZ = partition from prev step
+
+=> Open the container
+# cryptsetup open --type luks /dev/sdaZ lvm
+
+* decrypted container is now available at /dev/mapper/lvm
+
+=> Prepare logical volumes
+# pvcreate /dev/mapper/lvm
+
+=> Create volume group (VolumeGroupName)
+# vgcreate VolumeGroupName /dev/mapper/lvm
+
+=> Create logical volumes on volume group
+# lvcreate -L 8G VolumeGroupName -n swap
+# lvcreate -L 50G VolumeGroupName -n root
+# lvcreate -l 100%FREE VolumeGroupName -n home
+
+=> Format logical volume's filesystems
+# mkfs.ext4 /dev/mapper/VolumeGroupName-root
+# mkfs.ext4 /dev/mapper/VolumeGroupName-home
+# mkswap /dev/mapper/VolumeGroupName-swap
+
+=> Mount filesystems
+# mount /dev/mapper/VolumeGroupName-root /mnt
+# mkdir /mnt/home
+# mount /dev/mapper/VolumeGroupName-home /mnt/home
+# swapon /dev/mapper/VolumeGroupName-swap
+
+=> Preparing Boot Partition
+
+--> Create LUKS container for /boot
+# cryptsetup -s 512 luksFormat /dev/sdaY /media/usbstick/mykeyfile
+
+--> Open it
+# cryptsetup open /dev/sdaY cryptboot
+
+--> Create filesystem for /boot
+# mkfs.ext2 /dev/mapper/cryptboot
+
+--> Create /mnt/boot and mount it
+# mkdir /mnt/boot
+# mount /dev/mapper/cryptboot /mnt/boot
+
+--> Create mountpoint for ESP at /boot/efi and mount it
+# mkdir /mnt/boot/efi
+# mount /dev/sdaX /mnt/boot/efi
+
+===============================================================
+Installation
+===============================================================
+
+=> Configure Mirrors /etc/pacman.d/mirrorlist
+
+=> Install Base Packages
+# pacstrap -i /mnt base base-devel
+*** Make sure output says `==> Image creation successful`
+
+===============================================================
+Configuration
+===============================================================
+
+=> Generate fstab using UUIDs
+# genfstab -U /mnt >> /mnt/etc/fstab
+*** Check /mnt/etc/fstab to make sure it's correct
+
+=> Chroot to new system
+# arch-chroot /mnt /bin/bash
+
+=> Set locale
+
+--> Edit /etc/locale.gen  and uncomment en_US.UTF8 UTF-8
+
+--> Run
+# locale-gen
+
+--> Create /etc/locale.conf
+LANG=en_US.UTF-8
+
+=> Make sure keyboard layout is correct
+/etc/vconsole.conf
+*** Not needed for us keyboard since it's default
+
+=> Select time zone
+# tzselect
+
+=> Create symlink /etc/localtime
+# ln -s /usr/share/zoneinfo/ZONE/SUBZONE /etc/localtime
+*** ZONE and SUBZONE are the TZ values from tzselect
+
+=> Set to UTC
+# hwclock --systohc --utc
+
+=> Add `encrypt` and `lvm` hooks to /etc/mkinitcpio.conf (maybe add `keyboard` for USB keyboards to work in early userspace)
+HOOKS="... encrypt lvm2 ... filesystems ..."
+
+==> Add module for USBs file system (eg `vfat` or `ext4`) and one for codepage (eg nls_cp437)
+MODULES="nls_cp437 vfat"
+
+=> Regenerate initramfs image
+# mkinitcpio -p linux
+
+=> Install GRUB
+# pacman -S grub intel-ucode
+
+=> Configure GRUB to recognize LUKS encrypted /boot and unlock encrypted root at boot
+/etc/default/grub
+GRUB_CMDLINE_LINUX="... cryptdevice=UUID=<device-UUID>:lvm cryptkey=/dev/sdb1:ext4:/keys/secretkey root=/dev/mapper/VolumeGroupName-root ..."      
+    *** <device-UUID> == UUID of /dev/sdaZ (encrypted partition for LVM)
+    *** /dev/sdb1 == USB drive with keyfile *** Use UUID naming instead 
+        $ ls -l /dev/disk/by-uuid/
+GRUB_ENABLE_CRYPTODISK=y
+
+=> Generate GRUB conf file and install to mounted ESP
+# grub-mkconfig -o /boot/grub/grub.cfg
+*** For lvmetad warning
+    --> Exit chroot
+        # exit
+
+    # mkdir /mnt/hostrun
+    # mount --bind /run /mnt/hostrun
+
+    --> Change root
+        # arch-chroot /mnt /bin/bash
+
+    # mkdir /run/lvm
+    # mount --bind /hostrun/lvm /run/lvm
+*** /index.php/GRUB#Warning_when_installing_in_chroot says you can ignore these warnings if everything has been configured right
+# grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=grub --recheck
+ **if error about efibootmgr: not found --> install efibootmgr (pacman -S efibootmgr)
+
+=> Add keyfile to USB (/media/usbstick/mykeyfile)
+
+=> Add keyslot for keyfile to LUKS header
+# cryptsetup luksAddKey /dev/sda2 /media/usbstick/mykeyfile
+
+=> Unlocking secondary partition at boot
+/etc/crypttab
+cryptboot   /dev/sdaY   /media/usbstick/mykeyfile
+
+/etc/fstab
+/dev/mapper/cryptboot   /mnt/boot   ext2    defaults    0   2
+
+==> Set the hostname in /etc/hostname
+myhostname
+
+==> Add hostname to /etc/hosts
+...
+127.0.0.1   localhost.localdomain   localhost   myhostname
+::1         localhost.localdomain   localhost   myhostname
+...
+
+==> Set root password
+# passwd
+
+==> Unmount and Reboot
+# exit 
+# umount -R /mnt
+# reboot now
+
+===================================================================================================================
+Setup new system
+===================================================================================================================
+
+==> Add new user
+# useradd -m -g wheel -s /bin/bash myusername
+# passwd myusername
+
+==> Disable dhcpcd.service and enable/start dhcpcd@interface.service
+
+==> Update pacman
+# pacman -Syu
+
+==> Install sudo
+# pacman -S sudo
+
+==> Add myusername to sudoers with visudo
+*** add `%wheel ALL=(ALL) ALL` to allow wheel group members sudo access
+
+==> Install xorg-server
+# pacman -S xorg-server xorg-server-utils xorg-apps
+
+==> Identify video card then install driver for it
+$ lspci | grep -e VGA -e 3D
+*** see drivers on arch wiki /index.php/Xorg
+
+==> Install OpenBox and add it to Xinitrc
+# pacman -S openbox xorg-xinit
+
+--> Maintain authenticated session
+~/.xserverrc
+#!/bin/sh
+exec /usr/bin/Xorg -nolisten tcp "$@" vt$XDG_VTNR
+
+--> Create ~/.xinitrc
+$ cp /etc/X11/xinit/xinitrc ~/.xinitrc
+
+--> Append openbox
+exec openbox-session
+
+==> Reboot and login to new user and enviroment
+
+==> Install wifi packages
+# pacman -S iw wpa_supplicant dialog
+
+==> Install synaptics
+# pacman -S xf86-input-synaptics
