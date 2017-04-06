@@ -1,0 +1,59 @@
+#############################################################
+##                      Packages                           ##
+#############################################################
+
+## Bluetooth ##
+bluez
+bluez-utils
+
+## Composite Manager ##
+compton
+
+## Desktop Manager and Image Viewer ##
+feh
+
+## Graphics Drivers ##
+mesa
+xf86-video-intel
+xf86-video-nouveau
+
+## Shell ##
+zsh
+zsh-completions
+
+## System ##
+base
+base-devel
+efibootmgr
+intel-ucode
+libinput
+polkit
+sudo
+xf86-input-libinput
+
+## System Monitoring ##
+conky
+
+## Taskbar ##
+tint2
+
+## Terminal Emulator ##
+rxvt-unicode
+
+## Text Editor ##
+vim
+
+## Window Manager ##
+openbox
+
+## Wireless (dialog is needed for wifi-menu) ##
+iw
+wpa_supplicant
+dialog
+
+## Xorg ##
+xorg-apps
+xorg-server
+xorg-server-utils
+xorg-xinit
+xorg-xrandr

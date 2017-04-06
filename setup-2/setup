@@ -1,0 +1,235 @@
+=========================================================
+||                      Setup                          ||
+=========================================================
+
+* Dell Precision 5510
+
+* Intel CORE I7 w/ Intel HD Graphics 530
+
+* Nvidia Quadro M1000M
+
+* LVM on LUKS
+
+=========================================================
+||                    Pre Install                      ||
+=========================================================
+
+--> Set SATA config to AHCI to be able to boot live usb
+
+--> Wipe disk
+# shred -v -n 1 --random-source /dev/urandom /dev/nvme0n1
+
+--> Check that you are booted with UEFI
+# efivar -l
+
+=========================================================
+||                    Partitioning                     ||
+=========================================================
+
+--> Create new partition table [1]
+# parted /dev/nvme0n1
+(parted) mklabel gpt
+
+--> Create ESP [2 | 3]
+(parted) mkpart ESP fat32 1MiB 513MiB
+(parted) set 1 boot on
+# mkfs.fat -F32 /dev/nvme0n1p1
+
+--> Create encrypted system container
+(parted) mkpart primary ext4 513MiB 100%
+# mkfs.ext4 /dev/nvme0n1p2
+# cryptsetup -s 512 luksFormat /dev/nvme0n1p2 
+
+--> Open the encrypted system container
+# cryptsetup open --type luks /dev/nvme0n1p2 lvm
+
+* decrypted container is now available at /dev/mapper/lvm
+
+=========================================================
+||            Preparing Logical Volumes [4]            ||
+=========================================================
+
+--> Create the physical volume
+# pvcreate /dev/mapper/lvm
+
+--> Create volume group (VolumeGroupName)
+# vgcreate VolumeGroupName /dev/mapper/lvm
+
+--> Create logical volumes on volume group
+# lvcreate -L 8G VolumeGroupName -n swap
+# lvcreate -L 50G VolumeGroupName -n root
+# lvcreate -l 100%FREE VolumeGroupName -n home
+
+--> Format logical volume's filesystems
+# mkfs.ext4 /dev/mapper/VolumeGroupName-root
+# mkfs.ext4 /dev/mapper/VolumeGroupName-home
+# mkswap /dev/mapper/VolumeGroupName-swap
+
+--> Mount filesystems
+# mount /dev/mapper/VolumeGroupName-root /mnt
+# mkdir /mnt/home
+# mount /dev/mapper/VolumeGroupName-home /mnt/home
+# swapon /dev/mapper/VolumeGroupName-swap
+
+--> Mount boot partition
+# mkdir /mnt/boot
+# mount /dev/nvme0n1p1 /mnt/boot
+
+=========================================================
+||                     Installation                    ||
+=========================================================
+
+--> Setup wifi
+# wifi-menu
+
+--> Configure Mirrors /etc/pacman.d/mirrorlist [7]
+
+--> Install base system
+# pacstrap -i /mnt base base-devel vim iw wpa_supplicant dialog efibootmgr intel-ucode
+
+=========================================================
+||                     Configuration                   ||
+=========================================================
+
+--> Generate fstab using UUIDs
+# genfstab -U /mnt >> /mnt/etc/fstab
+*** Check /mnt/etc/fstab to make sure it's correct
+
+--> Chroot to new system
+# arch-chroot /mnt /bin/bash
+
+--> Edit /etc/locale.gen  and uncomment en_US.UTF8 UTF-8
+
+--> Run
+# locale-gen
+
+--> Create /etc/locale.conf
+LANG=en_US.UTF-8
+
+=> Select time zone
+# tzselect
+
+=> Create symlink /etc/localtime
+# ln -sf /usr/share/zoneinfo/ZONE/SUBZONE /etc/localtime
+*** ZONE and SUBZONE are the TZ values from tzselect
+
+=> Set to UTC
+# hwclock --systohc --utc
+
+--> Add `encrypt` and `lvm` hooks to /etc/mkinitcpio.conf
+HOOKS="... encrypt lvm2 ... filesystems ..."
+
+--> Regenerate initramfs image
+# mkinitcpio -p linux
+
+--> Setup systemd-boot
+# bootctl --path=/boot install
+
+--> Add the following to /boot/loader/loader.conf
+default arch
+timeout 4
+editor 0
+
+--> Create /boot/loader/entries/arch.conf with the following:
+title Arch Linux
+linux /vmlinuz-linux
+initrd /intel-ucode.img
+initrd /initramfs.img
+options cryptdevice=UUID=<UUID>:VolumeGroupName root=/dev/mapper/VolumeGroupName-root quiet rw
+
+--> Set the hostname in /etc/hostname
+myhostname
+
+--> Add hostname to /etc/hosts
+...
+127.0.0.1   localhost.localdomain   localhost
+::1         localhost.localdomain   localhost
+127.0.0.1   myhostname.localdomain   myhostname
+...
+
+==> Set root password
+# passwd
+
+==> Unmount and Reboot
+# exit 
+# umount -R /mnt
+# reboot now
+
+=========================================================
+||                     Post Install                    ||
+=========================================================
+
+--> Create new group for user
+# groupadd -g <GID> <my-group-name>
+
+--> Add new user
+# useradd -m -g <my-group-name> -G wheel -s /bin/zsh <my-username>
+# passwd <my-username>
+
+--> Add new user to sudoers
+# visudo
+** add `%wheel ALL=(ALL) ALL` to allow wheel group members sudo access
+
+--> Install graphics drivers and OpenGL [5]
+** if using PRIME for hybrid graphics use opensource drivers [6] **
+# pacman -S mesa xf86-video-intel xf86-video-nouveau
+
+--> Install xorg
+# pacman -S xorg-server xorg-server-utils xorg-xrandr xorg-apps xorg-xinit
+
+--> Install Openbox
+# pacman -S openbox
+
+--> Install Tint2 taskbar
+# pacman -S tint2
+
+--> Maintain authenticated session [8]
+~/.xserverrc
+#!/bin/sh
+exec /usr/bin/Xorg -nolisten tcp "$@" vt$XDG_VTNR
+
+--> Create ~/.xinitrc
+$ cp /etc/X11/xinit/xinitrc ~/.xinitrc
+
+--> Append openbox to ~/.xinitrc (Need to take out the programs it tries to start unless you have them installed)
+exec openbox-session
+
+--> Install libinput for better trackpad support [9]
+** Openbox right click menu wouldn't show until this or the synaptics drivers are installed **
+# pacman -S libinput xf86-input-libinput
+
+--> Install a composite manager (xcompmgr or compton) * Trying compton with this install *
+# pacman -S compton
+** Add the following to ~/.config/openbox/autostart
+compton -b
+
+--> Install a terminal emulator
+# pacman -S rxvt-unicode
+** Add this to the openbox menu ~/.config/openbox/menu.xml
+
+--> Install polkit to allow users to use power commands without root [10]
+# pacman -S polkit
+
+=========================================================
+||                     References                      ||
+=========================================================
+
+[1] https://wiki.archlinux.org/index.php/GNU_Parted#Create_new_partition_table
+
+[2] https://wiki.archlinux.org/index.php/GNU_Parted#UEFI.2FGPT_examples
+
+[3] https://wiki.archlinux.org/index.php/EFI_System_Partition
+
+[4] https://wiki.archlinux.org/index.php/Dm-crypt/Encrypting_an_entire_system#Preparing_the_logical_volumes
+
+[5] https://wiki.archlinux.org/index.php/xorg#Driver_installation
+
+[6] https://wiki.archlinux.org/index.php/PRIME#Installation
+
+[7] https://wiki.archlinux.org/index.php/mirrors#Sorting_mirrors
+
+[8] https://wiki.archlinux.org/index.php/Xinit#xserverrc
+
+[9] https://wiki.archlinux.org/index.php/Libinput
+
+[10] https://wiki.archlinux.org/index.php/allow_users_to_shutdown
